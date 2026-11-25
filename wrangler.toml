@@ -1,0 +1,22 @@
+name = "itsmart-fleet"
+main = "src/index.ts"
+compatibility_date = "2026-11-24"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/health"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "itsmart-fleet"
+database_id = "8e53abd4-b99d-4d95-9e33-183a9a19981a"
+migrations_dir = "migrations"
+
+[vars]
+DASHBOARD_HOST = "status.itsmart.lt"
+AGENT_API_HOST = "fleet-api.itsmart.lt"
+DASHBOARD_ORIGINS = "https://id-preview--1bca7bda-861f-4265-a0be-706ec05338b7.lovable.app"
+
+[triggers]
+crons = ["15 3 * * *"]

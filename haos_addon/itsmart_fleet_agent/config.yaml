@@ -1,0 +1,20 @@
+name: ITsmart Fleet Agent
+version: "0.3.0"
+slug: itsmart_fleet_agent
+description: Sends a heartbeat with CPU/RAM/disk every minute and a version report once a day.
+arch: [aarch64, amd64, armv7]
+init: false
+hassio_api: true
+hassio_role: default
+options:
+  fleet_url: https://fleet-api.itsmart.lt
+  node_id: n1
+  node_token: ""
+  heartbeat_interval: 60
+  report_interval_hours: 24
+schema:
+  fleet_url: url
+  node_id: str
+  node_token: password
+  heartbeat_interval: int(15,3600)
+  report_interval_hours: int(1,168)
