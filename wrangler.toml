@@ -1,4 +1,4 @@
-name = "itsmart-fleet"
+﻿name = "itsmart-fleet"
 main = "src/index.ts"
 compatibility_date = "2026-11-24"
 
@@ -9,8 +9,8 @@ run_worker_first = ["/api/*", "/health"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "itsmart-fleet"
-database_id = "8e53abd4-b99d-4d95-9e33-183a9a19981a"
+database_name = "itsmart-fleet-db"
+database_id = "ac98bdd9-32a6-401b-ab47-741b4d90d4e5"
 migrations_dir = "migrations"
 
 [vars]
@@ -20,3 +20,4 @@ DASHBOARD_ORIGINS = "https://id-preview--1bca7bda-861f-4265-a0be-706ec05338b7.lo
 
 [triggers]
 crons = ["15 3 * * *"]
+

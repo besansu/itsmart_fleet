@@ -1,4 +1,4 @@
-// ITsmart Fleet Worker — heartbeat-only reporting + daily info report.
+﻿// ITsmart Fleet Worker â€” heartbeat-only reporting + daily info report.
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
@@ -93,7 +93,7 @@ export default {
         .bind(decodeURIComponent(hm[1]!), since).all<{ received_at: string }>();
       return json({ heartbeats: results.map((r) => r.received_at) }, 200, ch);
     }
-    const deleteMatch = p.match(/^\\/api\\/v1\\/admin\\/nodes\\/([^/]+)$/);
+    const deleteMatch = p.match(/^\/api\/v1\/admin\/nodes\/([^/]+)$/);
     if (deleteMatch && req.method === "DELETE") {
       const nodeId = decodeURIComponent(deleteMatch[1]!);
       const exists = await env.DB.prepare("SELECT id FROM nodes WHERE id=?").bind(nodeId).first<{ id: string }>();
@@ -126,3 +126,4 @@ export default {
     await env.DB.prepare("DELETE FROM beats WHERE received_at < ?").bind(cutoff).run();
   },
 };
+
