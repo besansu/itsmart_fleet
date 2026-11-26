@@ -1,134 +1,120 @@
-#!/usr/bin/env sh
-set -u
 
-OPT=/data/options.json
-URL=$(jq -r '.fleet_url' "$OPT")
-ID=$(jq -r '.node_id' "$OPT")
-TOKEN=$(jq -r '.node_token' "$OPT")
-HB=$(jq -r '.heartbeat_interval' "$OPT")
-REP_H=$(jq -r '.report_interval_hours' "$OPT")
+#!/command/with-contenv bash
+set -eu
+
+CONFIG_PATH=/data/options.json
+
+FLEET_URL=$(jq -r '.fleet_url' "$CONFIG_PATH")
+NODE_ID=$(jq -r '.node_id' "$CONFIG_PATH")
+NODE_TOKEN=$(jq -r '.node_token' "$CONFIG_PATH")
+HEARTBEAT_INTERVAL=$(jq -r '.heartbeat_interval' "$CONFIG_PATH")
+REPORT_INTERVAL_HOURS=$(jq -r '.report_interval_hours' "$CONFIG_PATH")
 
 SUP_TOKEN="${SUPERVISOR_TOKEN:-}"
-REP_S=$((REP_H * 3600))
-LAST_REPORT=0
 
-sup() {
-  if [ -z "$SUP_TOKEN" ]; then
-    echo "unknown"
-    return
-  fi
-
-  curl -fsS -H "Authorization: Bearer $SUP_TOKEN" \
-    "http://supervisor/$1" 2>/dev/null |
-    jq -r "$2 // \"unknown\"" 2>/dev/null || echo "unknown"
+log() {
+  echo "[ITsmart Fleet] $1"
 }
 
-post() {
-  curl -fsS -m 15 -X POST "$URL$1" \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$2" >/dev/null
+api_get() {
+  curl -fsS \
+    -H "Authorization: Bearer $SUP_TOKEN" \
+    "http://supervisor/$1"
 }
 
-cpu_pct() {
-  read -r _ a b c d e f g h _ < /proc/stat
-  T1=$((a+b+c+d+e+f+g+h))
-  I1=$((d+e))
+cpu_usage() {
+  read -r _ u n s i w irq sirq st _ < /proc/stat
+  idle1=$((i + w))
+  total1=$((u + n + s + i + w + irq + sirq + st))
   sleep 1
-  read -r _ a b c d e f g h _ < /proc/stat
-  T2=$((a+b+c+d+e+f+g+h))
-  I2=$((d+e))
-  DT=$((T2-T1))
-  if [ "$DT" -gt 0 ]; then
-    echo $((100*(DT-(I2-I1))/DT))
-  else
-    echo null
-  fi
+  read -r _ u n s i w irq sirq st _ < /proc/stat
+  idle2=$((i + w))
+  total2=$((u + n + s + i + w + irq + sirq + st))
+  total=$((total2 - total1))
+  [ "$total" -gt 0 ] || { echo 0; return; }
+  echo $((100 * (total - (idle2 - idle1)) / total))
 }
 
-mem_pct() {
-  awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}
-    END {
-      if (t>0) printf "%d",(t-a)*100/t;
-      else print "null"
-    }' /proc/meminfo
+memory_usage() {
+  awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {
+    if (t>0) printf "%d", (t-a)*100/t; else print 0
+  }' /proc/meminfo
 }
 
-disk_pct() {
+disk_info() {
+  df -Pk /config | awk 'NR==2 {
+    printf "{\"percent\":%d,\"used_gb\":%.2f,\"total_gb\":%.2f}",
+    $5+0, $3/1048576, $2/1048576
+  }'
+}
+
+get_versions() {
   if [ -z "$SUP_TOKEN" ]; then
-    echo null
+    echo '{"core_version":"unknown","supervisor_version":"unknown","os_version":"unknown"}'
     return
   fi
 
-  RESPONSE=$(curl -fsS -H "Authorization: Bearer $SUP_TOKEN" \
-    http://supervisor/host/info 2>/dev/null) || {
-      echo null
-      return
-    }
-
-  echo "$RESPONSE" | jq -r '
-    if (.data.disk_total // 0) > 0 then
-      ((.data.disk_used / .data.disk_total * 100) | floor)
-    else null end
-  ' 2>/dev/null || echo null
-}
-
-metrics() {
-  C=$(cpu_pct)
-  M=$(mem_pct)
-  D=$(disk_pct)
+  info=$(api_get info 2>/dev/null || echo '{}')
+  host=$(api_get host/info 2>/dev/null || echo '{}')
+  supervisor=$(api_get supervisor/info 2>/dev/null || echo '{}')
 
   jq -n \
-    --arg id "$ID" \
-    --arg c "$C" \
-    --arg m "$M" \
-    --arg d "$D" \
-    '{
-      node_id: $id,
-      cpu_percent: (try ($c | tonumber) catch null),
-      memory_percent: (try ($m | tonumber) catch null),
-      disk_percent: (try ($d | tonumber) catch null)
-    }'
+    --arg core "$(echo "$info" | jq -r '.data.version // "unknown"')" \
+    --arg supervisor "$(echo "$supervisor" | jq -r '.data.version // "unknown"')" \
+    --arg os "$(echo "$host" | jq -r '.data.operating_system // .data.os_version // "unknown"')" \
+    '{core_version:$core,supervisor_version:$supervisor,os_version:$os}'
 }
 
-echo "ITsmart Fleet Agent started: node=$ID"
+send_heartbeat() {
+  cpu=$(cpu_usage)
+  mem=$(memory_usage)
+  disk=$(disk_info)
 
-if [ -z "$SUP_TOKEN" ]; then
-  echo "WARNING: Supervisor token unavailable; disk and version reporting limited"
-fi
+  payload=$(jq -n \
+    --arg id "$NODE_ID" \
+    --argjson cpu "$cpu" \
+    --argjson mem "$mem" \
+    --argjson disk "$disk" \
+    '{
+      node_id:$id,
+      cpu_percent:$cpu,
+      memory_percent:$mem,
+      disk_percent:$disk.percent,
+      disk_used_gb:$disk.used_gb,
+      disk_total_gb:$disk.total_gb
+    }')
 
+  curl -fsS -X POST "$FLEET_URL/api/v1/heartbeat" \
+    -H "Authorization: Bearer $NODE_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$payload" >/dev/null
+
+  log "Heartbeat sent: CPU ${cpu}%, RAM ${mem}%, disk $(echo "$disk" | jq -r '.percent')%"
+}
+
+send_report() {
+  versions=$(get_versions)
+
+  curl -fsS -X POST "$FLEET_URL/api/v1/report" \
+    -H "Authorization: Bearer $NODE_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$versions" >/dev/null
+
+  log "Version report sent: $versions"
+}
+
+log "Agent started. Supervisor token: $([ -n "$SUP_TOKEN" ] && echo YES || echo NO)"
+
+last_report=0
 while true; do
-  NOW=$(date +%s)
+  send_heartbeat || log "Heartbeat failed"
+  now=$(date +%s)
+  interval=$((REPORT_INTERVAL_HOURS * 3600))
 
-  if [ $((NOW - LAST_REPORT)) -ge "$REP_S" ]; then
-    BODY=$(jq -n \
-      --arg id "$ID" \
-      --arg c "$(sup core/info .data.version)" \
-      --arg s "$(sup supervisor/info .data.version)" \
-      --arg o "$(sup os/info .data.version)" \
-      '{
-        node_id: $id,
-        core_version: $c,
-        supervisor_version: $s,
-        os_version: $o
-      }')
-
-    if post /api/v1/report "$BODY"; then
-      LAST_REPORT=$NOW
-      echo "Version report sent"
-    else
-      echo "Version report failed; will retry"
-    fi
+  if [ "$last_report" -eq 0 ] || [ $((now - last_report)) -ge "$interval" ]; then
+    send_report || log "Version report failed"
+    last_report=$now
   fi
 
-  BODY=$(metrics)
-  echo "Heartbeat payload: $BODY"
-
-  if post /api/v1/heartbeat "$BODY"; then
-    echo "Heartbeat sent"
-  else
-    echo "Heartbeat failed"
-  fi
-
-  sleep "$HB"
+  sleep "$HEARTBEAT_INTERVAL"
 done
